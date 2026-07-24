@@ -1,0 +1,10 @@
+.pytest_cache
+__pycache__
+.env
+app2.py
+chat_agent.py
+evidence_validator.py
+run_app.py
+.vscode
+docs
+venv
