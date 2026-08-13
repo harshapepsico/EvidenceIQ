@@ -1,4 +1,4 @@
-"""Azure DevOps service layer."""
+"""Azure DevOps service layer with recursive suites and tester fallback."""
 
 import os
 from typing import Any, Dict, List, Optional
@@ -35,7 +35,6 @@ def fetch_json(session: requests.Session, url: str, headers: Dict[str, str], par
         response = session.get(url, headers=headers, params=params, timeout=30)
         response.raise_for_status()
         return response.json(), ""
-    
     except requests.RequestException as exc:
         return None, response_error_message(exc)
     except ValueError as exc:
@@ -57,8 +56,6 @@ def fetch_result_attachments(session: requests.Session, headers: Dict[str, str],
 
     if error:
         return [], f"Result attachments: {error}"
-    
-    #print(data)
 
     return data.get("value", []), ""
 
@@ -78,8 +75,6 @@ def fetch_iteration_attachments(session: requests.Session, headers: Dict[str, st
             "api-version": API_VERSION,
         },
     )
-
-    #print(data)
 
     if error:
         return [], f"Iteration attachments: {error}"
@@ -109,7 +104,6 @@ def fetch_all_suite_ids(session: requests.Session, headers: Dict[str, str], org:
 
     response = session.get(suites_url, headers=headers, timeout=30)
     response.raise_for_status()
-    #print(response)
 
     suites = response.json().get("value", [])
     suite_ids = [suite["id"] for suite in suites]
@@ -136,6 +130,155 @@ def normalize_suite_ids(suite_ids: Any) -> List[int]:
     return list(suite_ids)
 
 
+def fetch_child_suite_ids(
+    session: requests.Session,
+    headers: Dict[str, str],
+    org: str,
+    project: str,
+    plan_id: str,
+    suite_id: int,
+) -> List[int]:
+    """Return direct child suite IDs, or an empty list if discovery fails."""
+    suite_url = (
+        f"https://dev.azure.com/{org}/{project}"
+        f"/_apis/testplan/Plans/{plan_id}/Suites/{suite_id}"
+    )
+    data, error = fetch_json(
+        session,
+        suite_url,
+        headers,
+        params={"expand": "Children", "api-version": "7.1"},
+    )
+
+    if error:
+        print(f"Unable to discover children for Suite {suite_id}: {error}")
+        return []
+
+    child_ids = []
+    for child in data.get("children") or []:
+        child_id = child.get("id") if isinstance(child, dict) else None
+        if child_id is None:
+            continue
+        try:
+            child_ids.append(int(child_id))
+        except (TypeError, ValueError):
+            print(f"Ignoring invalid child suite ID under Suite {suite_id}: {child_id!r}")
+
+    return child_ids
+
+
+def collect_suite_ids(
+    session: requests.Session,
+    headers: Dict[str, str],
+    org: str,
+    project: str,
+    plan_id: str,
+    root_suite_ids: List[int],
+) -> List[int]:
+    """Collect roots and all descendants in deterministic depth-first order."""
+    collected = []
+    visited = set()
+    pending = list(reversed(root_suite_ids))
+
+    while pending:
+        suite_id = pending.pop()
+        suite_key = str(suite_id)
+        if suite_key in visited:
+            continue
+
+        visited.add(suite_key)
+        collected.append(suite_id)
+        child_ids = fetch_child_suite_ids(
+            session, headers, org, project, plan_id, suite_id
+        )
+        pending.extend(reversed(child_ids))
+
+    return collected
+
+
+
+def current_tester_from_point(point: Dict[str, Any]) -> Any:
+    """Return the tester exactly as the existing record builder would."""
+    assigned = point.get("assignedTo", {})
+    if isinstance(assigned, dict):
+        return assigned.get("displayName", "Unassigned")
+    return assigned
+
+
+def is_assigned_tester(tester: Any) -> bool:
+    """Return whether a tester value represents an assigned identity."""
+    if tester is None:
+        return False
+    normalized = str(tester).strip()
+    return bool(normalized) and normalized.casefold() != "unassigned"
+
+
+def needs_tester_fallback(point: Dict[str, Any]) -> bool:
+    """Return whether this point is eligible for a Test Result lookup."""
+    outcome = str(point.get("outcome", "Not Run")).strip()
+    return (
+        outcome.casefold() == "passed"
+        and not is_assigned_tester(current_tester_from_point(point))
+    )
+
+
+def fetch_test_result_executor(
+    session: requests.Session,
+    headers: Dict[str, str],
+    org: str,
+    project: str,
+    run_id: str,
+    result_id: str,
+) -> Optional[str]:
+    """Fetch the identity in TestCaseResult.runBy."""
+    result_url = (
+        f"https://dev.azure.com/{org}/{project}"
+        f"/_apis/test/Runs/{run_id}/results/{result_id}"
+    )
+    data, error = fetch_json(
+        session,
+        result_url,
+        headers,
+        params={"api-version": API_VERSION},
+    )
+
+    if error:
+        print(
+            f"Unable to resolve tester for Run {run_id}, "
+            f"Result {result_id}: {error}"
+        )
+        return None
+
+    run_by = data.get("runBy") if isinstance(data, dict) else None
+    if not isinstance(run_by, dict):
+        return None
+
+    executor = run_by.get("displayName") or run_by.get("uniqueName")
+    return str(executor).strip() if executor else None
+
+
+def resolve_current_tester(
+    session: requests.Session,
+    headers: Dict[str, str],
+    org: str,
+    project: str,
+    point: Dict[str, Any],
+) -> Any:
+    """Use TestCaseResult.runBy only for a passed, unassigned test point."""
+    current_tester = current_tester_from_point(point)
+    if not needs_tester_fallback(point):
+        return current_tester
+
+    run_id, result_id = extract_run_result_ids(point)
+    if not run_id or not result_id:
+        return current_tester
+
+    executor = fetch_test_result_executor(
+        session, headers, org, project, run_id, result_id
+    )
+    return executor if is_assigned_tester(executor) else current_tester
+
+
 def fetch_points_for_suite(session: requests.Session, headers: Dict[str, str], org: str, project: str, plan_id: str, suite_id: int) -> List[Dict[str, Any]]:
     points = []
     skip = 0
@@ -158,8 +301,6 @@ def fetch_points_for_suite(session: requests.Session, headers: Dict[str, str], o
             timeout=30,
         )
 
-        #print(response)
-
         if response.status_code != 200:
             body = response.text.replace("\n", " ").strip()[:300]
             message = f"Skipping Suite {suite_id}: {response.status_code}"
@@ -168,11 +309,13 @@ def fetch_points_for_suite(session: requests.Session, headers: Dict[str, str], o
             print(message)
             return []
 
-        page = response.json().get("value", [])
-        #print(page)
+        try:
+            page = response.json().get("value", [])
+        except ValueError as exc:
+            print(f"Skipping Suite {suite_id}: Invalid JSON response: {exc}")
+            return []
+
         points.extend(page)
-        #print(points)
-        #print()
 
         if len(page) < POINT_PAGE_SIZE:
             return points
@@ -186,14 +329,36 @@ def fetch_test_points(project: str, plan_id: str, suite_ids: Optional[Any] = Non
     session = create_session(pat)
     headers = {"Accept": "application/json"}
 
-    resolved_suite_ids = resolve_suite_ids(suite_ids, suite_ids_input, session, headers, ORG, project, plan_id)
+    root_suite_ids = resolve_suite_ids(
+        suite_ids, suite_ids_input, session, headers, ORG, project, plan_id
+    )
+    resolved_suite_ids = collect_suite_ids(
+        session, headers, ORG, project, plan_id, root_suite_ids
+    )
     records = []
+    seen_test_case_ids = set()
 
     for suite_id in resolved_suite_ids:
         print(f"Fetching Suite {suite_id}")
-        points = fetch_points_for_suite(session, headers, ORG, project, plan_id, suite_id)
-        #print(f"Fetched {len(points)} points for Suite {suite_id}")
-        attachments = [None] * len(points)
+        points = fetch_points_for_suite(
+            session, headers, ORG, project, plan_id, suite_id
+        )
+
+        unique_points = []
+        for point in points:
+            test_case = point.get("testCase") or {}
+            test_case_id = test_case.get("id") if isinstance(test_case, dict) else None
+            if test_case_id is not None:
+                deduplication_key = str(test_case_id)
+                if deduplication_key in seen_test_case_ids:
+                    continue
+                seen_test_case_ids.add(deduplication_key)
+            unique_points.append(point)
+
+        attachments = [None] * len(unique_points)
+        resolved_testers = [
+            current_tester_from_point(point) for point in unique_points
+        ]
 
         from concurrent.futures import ThreadPoolExecutor, as_completed
         from evidenceiq.services.evidence_service import fetch_attachment_details
@@ -201,10 +366,20 @@ def fetch_test_points(project: str, plan_id: str, suite_ids: Optional[Any] = Non
         with ThreadPoolExecutor(max_workers=min(20, os.cpu_count() * 4 if os.cpu_count() else 4)) as executor:
             future_map = {
                 executor.submit(fetch_attachment_details, session, headers, ORG, project, point): index
-                for index, point in enumerate(points)
+                for index, point in enumerate(unique_points)
             }
-
-            #print(future_map)
+            tester_future_map = {
+                executor.submit(
+                    resolve_current_tester,
+                    session,
+                    headers,
+                    ORG,
+                    project,
+                    point,
+                ): index
+                for index, point in enumerate(unique_points)
+                if needs_tester_fallback(point)
+            }
 
             for future in as_completed(future_map):
                 index = future_map[future]
@@ -213,12 +388,34 @@ def fetch_test_points(project: str, plan_id: str, suite_ids: Optional[Any] = Non
                 except Exception as exc:
                     attachments[index] = evidence_response("Error", error=f"Unexpected attachment lookup error: {exc}")
 
+            for future in as_completed(tester_future_map):
+                index = tester_future_map[future]
+                try:
+                    resolved_testers[index] = future.result()
+                except Exception as exc:
+                    print(
+                        f"Unexpected tester lookup error for point "
+                        f"{unique_points[index].get('id', 'N/A')}: {exc}"
+                    )
+
         from evidenceiq.processing.transformers import build_record
 
-        for point, attachment in zip(points, attachments):
+        resolved_points = []
+        for point, resolved_tester in zip(unique_points, resolved_testers):
+            current_tester = current_tester_from_point(point)
+            if (
+                resolved_tester != current_tester
+                and is_assigned_tester(resolved_tester)
+            ):
+                point = dict(point)
+                point["assignedTo"] = {"displayName": resolved_tester}
+            resolved_points.append(point)
+
+        for point, attachment in zip(resolved_points, attachments):
             records.append(build_record(suite_id, point, attachment))
 
     return build_dataframe(records)
+
 
 # def fetch_paycode(org: str, project: str, test_case_id: int):
 #     session = create_session(pat)
@@ -247,21 +444,21 @@ def fetch_test_points(project: str, plan_id: str, suite_ids: Optional[Any] = Non
 
 #             last_expected = values[1].text.strip() if len(values) > 1 and values[1].text else ""
 
-#             #print(last_expected)
-
 #         return last_expected
-    
+
 #     except requests.RequestException as exc:
 #         return None, response_error_message(exc)
 #     except ValueError as exc:
 #         return None, f"Invalid JSON response: {exc}"
 
-if __name__ == "__main__":
-    # Example usage
-    project = "EUROPE_SFA"
-    plan_id = "99859"
-    suite_ids = 171093# or provide a list of suite IDs
-    pat = None  # or provide your Personal Access Token
 
-    paycode = fetch_test_points(project, plan_id, suite_ids, pat)
-    print(paycode)
+# if __name__ == "__main__":
+#     project = "EUROPE_SFA"
+#     plan_id = "99859"
+#     suite_ids = 171093
+#     pat = None
+
+#     paycode = fetch_test_points(project, plan_id, suite_ids, pat)
+#     print(paycode)
+
+

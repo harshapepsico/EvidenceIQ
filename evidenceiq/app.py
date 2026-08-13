@@ -8,7 +8,7 @@ from evidenceiq.frontend.components.dashboard import render_dashboard
 from evidenceiq.frontend.components.sidebar import render_filter_controls, render_sidebar_inputs
 from evidenceiq.processing.metrics import calculate_metrics
 from evidenceiq.processing.reports import filter_dataframe
-from evidenceiq.services.ado_service3 import fetch_test_points
+from evidenceiq.services.ado_service import fetch_test_points
 
 
 def run_app() -> None:
