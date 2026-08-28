@@ -4,4 +4,8 @@ pandas
 plotly
 dotenv
 streamlit
+fastapi
+uvicorn
+requests
 pytest  #only if you use pytest for testing for terminal
+liteparse
