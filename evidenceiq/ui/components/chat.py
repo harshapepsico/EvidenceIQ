@@ -1,9 +1,6 @@
 """Chat UI helpers."""
 
 import streamlit as st
-from langchain_core.messages import HumanMessage
-
-from evidenceiq.services.ai_service import ask_agent
 
 
 def render_chat(df) -> None:
@@ -20,6 +17,12 @@ def render_chat(df) -> None:
     question = st.chat_input("Ask a question about the test cases...")
 
     if question:
+        # Keep AI libraries out of the dashboard startup path. They are only
+        # needed once the user actually submits a question.
+        from langchain_core.messages import HumanMessage
+
+        from evidenceiq.services.ai_service import ask_agent
+
         with st.chat_message("user"):
             st.markdown(question)
 
@@ -36,5 +39,7 @@ def render_chat(df) -> None:
         with st.chat_message("assistant"):
             st.markdown(response)
 
-        st.session_state.messages.append({"role": "assistant", "content": response})
+        st.session_state.messages.append(
+            {"role": "assistant", "content": response}
+        )
         st.rerun()
