@@ -1,7 +1,9 @@
 """Azure DevOps service layer with recursive suites and tester fallback."""
 
 import os
-from typing import Any, Dict, List, Optional
+import random
+import time
+from typing import Any, Callable, Dict, List, Optional
 import xml.etree.ElementTree as ET
 import xml
 
@@ -9,7 +11,16 @@ import pandas as pd
 import requests
 from requests.auth import HTTPBasicAuth
 
-from evidenceiq.config.settings import API_VERSION, ORG, POINT_PAGE_SIZE, get_pat
+from evidenceiq.config.settings import (
+    ADO_BACKOFF_SECONDS,
+    ADO_MAX_BACKOFF_SECONDS,
+    ADO_MAX_RETRIES,
+    API_VERSION,
+    MAX_WORKERS,
+    ORG,
+    POINT_PAGE_SIZE,
+    get_pat,
+)
 from evidenceiq.models.responses import evidence_response
 from evidenceiq.processing.transformers import build_dataframe, build_record
 from evidenceiq.utils.helpers import extract_run_result_ids, response_error_message
@@ -30,15 +41,54 @@ def validate_environment(project: str, plan_id: str, pat: Optional[str] = None) 
         )
 
 
-def fetch_json(session: requests.Session, url: str, headers: Dict[str, str], params: Optional[Dict[str, Any]] = None):
+def _retry_delay(response: Optional[requests.Response], retry_number: int) -> float:
+    retry_after = response.headers.get("Retry-After") if response is not None else None
     try:
-        response = session.get(url, headers=headers, params=params, timeout=30)
-        response.raise_for_status()
-        return response.json(), ""
-    except requests.RequestException as exc:
-        return None, response_error_message(exc)
-    except ValueError as exc:
-        return None, f"Invalid JSON response: {exc}"
+        return max(0.0, float(retry_after))
+    except (TypeError, ValueError):
+        delay = ADO_BACKOFF_SECONDS * (2 ** (retry_number - 1))
+        return min(ADO_MAX_BACKOFF_SECONDS, delay) + random.uniform(0, 0.25)
+
+
+def fetch_json(
+    session: requests.Session,
+    url: str,
+    headers: Dict[str, str],
+    params: Optional[Dict[str, Any]] = None,
+    include_response: bool = False,
+):
+    """Fetch JSON while honoring ADO throttling and transient failures."""
+    response = None
+    last_error = None
+
+    for attempt in range(ADO_MAX_RETRIES + 1):
+        try:
+            response = session.get(url, headers=headers, params=params, timeout=30)
+            if response.status_code not in {408, 429, *range(500, 600)}:
+                if response.status_code >= 400:
+                    result = (None, response_error_message(requests.HTTPError(response=response)))
+                    return (*result, response) if include_response else result
+                data = response.json()
+                return (data, "", response) if include_response else (data, "")
+            last_error = requests.HTTPError(response=response)
+        except requests.RequestException as exc:
+            last_error = exc
+            response = getattr(exc, "response", None)
+        except ValueError as exc:
+            result = (None, f"Invalid JSON response: {exc}")
+            return (*result, response) if include_response else result
+
+        if attempt >= ADO_MAX_RETRIES:
+            break
+
+        retry_number = attempt + 1
+        delay = _retry_delay(response, retry_number)
+        status = response.status_code if response is not None else "request error"
+        print(f"Retrying ADO request after {status}; attempt {retry_number} in {delay:.2f}s")
+        time.sleep(delay)
+
+    result = (None, response_error_message(last_error or requests.RequestException("ADO request failed")))
+    return (*result, response) if include_response else result
 
 
 def fetch_result_attachments(session: requests.Session, headers: Dict[str, str], org: str, project: str, run_id: str, result_id: str):
@@ -102,11 +152,34 @@ def fetch_all_suite_ids(session: requests.Session, headers: Dict[str, str], org:
         f"?api-version=7.1-preview.1"
     )
 
-    response = session.get(suites_url, headers=headers, timeout=30)
-    response.raise_for_status()
+    suite_ids = []
+    continuation_token = None
 
-    suites = response.json().get("value", [])
-    suite_ids = [suite["id"] for suite in suites]
+    while True:
+        params = {"api-version": "7.1-preview.1"}
+        if continuation_token:
+            params["continuationToken"] = continuation_token
+        data, error, response = fetch_json(
+            session, suites_url, headers, params=params, include_response=True
+        )
+        if error:
+            raise RuntimeError(f"Unable to fetch plan suites: {error}")
+
+        suites = data.get("value", [])
+        suite_ids.extend(
+            suite["id"]
+            for suite in suites
+            if isinstance(suite, dict) and "id" in suite
+        )
+        continuation_token = (
+            data.get("continuationToken")
+            or data.get("continuationtoken")
+            or response.headers.get("x-ms-continuationtoken")
+            or response.headers.get("x-ms-continuation-token")
+        )
+        if not continuation_token:
+            break
+
     return suite_ids
 
 
@@ -289,31 +362,22 @@ def fetch_points_for_suite(session: requests.Session, headers: Dict[str, str], o
             f"/_apis/test/Plans/{plan_id}/Suites/{suite_id}/points"
         )
 
-        response = session.get(
+        page, error = fetch_json(
+            session,
             url,
-            headers=headers,
+            headers,
             params={
                 "includePointDetails": "true",
                 "$skip": skip,
                 "$top": POINT_PAGE_SIZE,
                 "api-version": API_VERSION,
             },
-            timeout=30,
         )
-
-        if response.status_code != 200:
-            body = response.text.replace("\n", " ").strip()[:300]
-            message = f"Skipping Suite {suite_id}: {response.status_code}"
-            if body:
-                message = f"{message} - {body}"
-            print(message)
+        if error:
+            print(f"Skipping Suite {suite_id}: {error}")
             return []
 
-        try:
-            page = response.json().get("value", [])
-        except ValueError as exc:
-            print(f"Skipping Suite {suite_id}: Invalid JSON response: {exc}")
-            return []
+        page = page.get("value", [])
 
         points.extend(page)
 
@@ -323,8 +387,17 @@ def fetch_points_for_suite(session: requests.Session, headers: Dict[str, str], o
         skip += len(page)
 
 
-def fetch_test_points(project: str, plan_id: str, suite_ids: Optional[Any] = None, pat: Optional[str] = None, suite_ids_input: str = "") -> pd.DataFrame:
+def fetch_test_points(
+    project: str,
+    plan_id: str,
+    suite_ids: Optional[Any] = None,
+    pat: Optional[str] = None,
+    suite_ids_input: str = "",
+    progress_callback: Optional[Callable[[int, int], None]] = None,
+) -> pd.DataFrame:
     validate_environment(project, plan_id, pat)
+
+    print("environment is validated")
 
     session = create_session(pat)
     headers = {"Accept": "application/json"}
@@ -332,13 +405,18 @@ def fetch_test_points(project: str, plan_id: str, suite_ids: Optional[Any] = Non
     root_suite_ids = resolve_suite_ids(
         suite_ids, suite_ids_input, session, headers, ORG, project, plan_id
     )
+    print("resolved suite ids")
     resolved_suite_ids = collect_suite_ids(
         session, headers, ORG, project, plan_id, root_suite_ids
     )
+    print("collected suite ids")
+    total_suites = len(resolved_suite_ids)
+    if progress_callback:
+        progress_callback(0, total_suites)
     records = []
     seen_test_case_ids = set()
 
-    for suite_id in resolved_suite_ids:
+    for suite_index, suite_id in enumerate(resolved_suite_ids, start=1):
         print(f"Fetching Suite {suite_id}")
         points = fetch_points_for_suite(
             session, headers, ORG, project, plan_id, suite_id
@@ -363,7 +441,7 @@ def fetch_test_points(project: str, plan_id: str, suite_ids: Optional[Any] = Non
         from concurrent.futures import ThreadPoolExecutor, as_completed
         from evidenceiq.services.evidence_service import fetch_attachment_details
 
-        with ThreadPoolExecutor(max_workers=min(20, os.cpu_count() * 4 if os.cpu_count() else 4)) as executor:
+        with ThreadPoolExecutor(max_workers=MAX_WORKERS) as executor:
             future_map = {
                 executor.submit(fetch_attachment_details, session, headers, ORG, project, point): index
                 for index, point in enumerate(unique_points)
@@ -414,6 +492,9 @@ def fetch_test_points(project: str, plan_id: str, suite_ids: Optional[Any] = Non
         for point, attachment in zip(resolved_points, attachments):
             records.append(build_record(suite_id, point, attachment))
 
+        if progress_callback:
+            progress_callback(suite_index, total_suites)
+
     return build_dataframe(records)
 
 
@@ -460,5 +541,4 @@ def fetch_test_points(project: str, plan_id: str, suite_ids: Optional[Any] = Non
 
 #     paycode = fetch_test_points(project, plan_id, suite_ids, pat)
 #     print(paycode)
-
 

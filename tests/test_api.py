@@ -61,3 +61,29 @@ def test_dashboard_post_route(monkeypatch):
 
     assert response.status_code == 200
     assert response.json()["metrics"]["not_run"] == 1
+
+
+def test_dashboard_job_reuses_completed_result(monkeypatch):
+    dataframe = pd.DataFrame([{"Outcome": "Passed"}])
+    fetch = lambda **kwargs: dataframe
+    monkeypatch.setattr("backend.app.fetch_test_points", fetch)
+
+    request = {"project": "CacheDemo", "plan_id": "123", "suite_ids": "10"}
+    client = TestClient(app)
+    first = client.post("/dashboard/jobs", json=request)
+    assert first.status_code == 202
+    first_job_id = first.json()["job_id"]
+
+    status_response = client.get(f"/dashboard/jobs/{first_job_id}")
+    for _ in range(20):
+        if status_response.json()["status"] == "completed":
+            break
+        status_response = client.get(f"/dashboard/jobs/{first_job_id}")
+
+    assert status_response.json()["status"] == "completed"
+    second = client.post("/dashboard/jobs", json=request)
+
+    assert second.status_code == 202
+    assert second.json() == {"job_id": first_job_id, "status": "completed"}
+    result = client.get(f"/dashboard/jobs/{first_job_id}/result")
+    assert result.json()["records"] == [{"Outcome": "Passed"}]
