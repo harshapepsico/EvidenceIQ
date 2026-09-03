@@ -43,3 +43,22 @@ Content-Type: application/json
 
 `suite_ids` is optional. When omitted, the existing Azure DevOps service
 discovers the plan's suites and recursively loads their child suites.
+
+For large plans, ADO request concurrency and retry behavior can be tuned in
+`.env` without changing the API request:
+
+```text
+ADO_MAX_WORKERS=4
+ADO_MAX_RETRIES=4
+ADO_BACKOFF_SECONDS=1
+ADO_MAX_BACKOFF_SECONDS=30
+```
+
+The service honors numeric `Retry-After` responses. When retries are
+exhausted while loading a suite, that suite is logged and skipped so other
+suites can still be displayed.
+
+Dashboard loads run as background jobs. The UI polls the job until its result
+is ready, and completed results are cached in the backend for one hour. A
+repeated request with the same project, plan, and suite IDs reuses that
+cached result.

@@ -2,6 +2,7 @@
 
 import os
 import sys
+import time
 from pathlib import Path
 from typing import Any, Dict
 
@@ -18,6 +19,9 @@ from evidenceiq.ui.components.sidebar import render_sidebar_inputs
 
 DEFAULT_API_URL = "http://127.0.0.1:8000"
 REQUEST_TIMEOUT_SECONDS = 300
+JOB_REQUEST_TIMEOUT_SECONDS = 15
+JOB_POLL_INTERVAL_SECONDS = 2
+JOB_POLL_TIMEOUT_SECONDS = 1800
 
 
 def _error_detail(response: requests.Response) -> str:
@@ -40,21 +44,51 @@ def fetch_dashboard(
     project: str,
     plan_id: str,
     suite_ids: str,
+    progress_callback=None,
 ) -> Dict[str, Any]:
-    """Request dashboard data from the FastAPI backend."""
+    """Submit a dashboard job and poll until its cached result is ready."""
     api_url = os.getenv("EVIDENCEIQ_API_URL", DEFAULT_API_URL).rstrip("/")
     response = requests.post(
-        f"{api_url}/dashboard/load",
+        f"{api_url}/dashboard/jobs",
         json={
             "project": project,
             "plan_id": plan_id,
             "suite_ids": suite_ids or None,
         },
-        timeout=REQUEST_TIMEOUT_SECONDS,
+        timeout=JOB_REQUEST_TIMEOUT_SECONDS,
     )
     if not response.ok:
         raise RuntimeError(_error_detail(response))
-    return response.json()
+
+    job_id = response.json()["job_id"]
+    deadline = time.monotonic() + JOB_POLL_TIMEOUT_SECONDS
+    while time.monotonic() < deadline:
+        status_response = requests.get(
+            f"{api_url}/dashboard/jobs/{job_id}",
+            timeout=JOB_REQUEST_TIMEOUT_SECONDS,
+        )
+        if not status_response.ok:
+            raise RuntimeError(_error_detail(status_response))
+        job = status_response.json()
+        if progress_callback:
+            progress_callback(
+                job.get("progress", 0),
+                job.get("completed_suites", 0),
+                job.get("total_suites", 0),
+            )
+        if job["status"] == "completed":
+            result_response = requests.get(
+                f"{api_url}/dashboard/jobs/{job_id}/result",
+                timeout=JOB_REQUEST_TIMEOUT_SECONDS,
+            )
+            if not result_response.ok:
+                raise RuntimeError(_error_detail(result_response))
+            return result_response.json()
+        if job["status"] == "failed":
+            raise RuntimeError(job.get("error") or "Dashboard job failed.")
+        time.sleep(JOB_POLL_INTERVAL_SECONDS)
+
+    raise TimeoutError("Dashboard is still loading. Please try again shortly.")
 
 
 def render_loaded_dashboard(records) -> None:
@@ -100,8 +134,21 @@ def run_app() -> None:
         else:
             with st.spinner("Fetching test cases from Azure DevOps..."):
                 try:
-                    payload = fetch_dashboard(project, plan_id, suite_ids_input)
-                except requests.RequestException as exc:
+                    progress_bar = st.progress(0, text="Starting dashboard load...")
+
+                    def update_progress(percentage, completed, total):
+                        label = (
+                            f"Fetching suites: {completed}/{total} completed ({percentage}%)"
+                            if total
+                            else "Discovering test suites..."
+                        )
+                        progress_bar.progress(percentage, text=label)
+
+                    payload = fetch_dashboard(
+                        project, plan_id, suite_ids_input, update_progress
+                    )
+                    progress_bar.progress(100, text="Dashboard ready (100%)")
+                except (requests.RequestException, TimeoutError) as exc:
                     st.error(
                         "Could not reach the EvidenceIQ backend. "
                         f"Make sure it is running at the configured URL. ({exc})"
