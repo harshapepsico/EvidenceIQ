@@ -17,25 +17,12 @@ def render_chat(df) -> None:
     question = st.chat_input("Ask a question about the test cases...")
 
     if question:
-        # Keep AI libraries out of the dashboard startup path. They are only
-        # needed once the user actually submits a question.
-        from langchain_core.messages import HumanMessage
-
-        from evidenceiq.services.ai_service import ask_agent
-
         with st.chat_message("user"):
             st.markdown(question)
 
         st.session_state.messages.append({"role": "user", "content": question})
 
-        history = []
-        for message in st.session_state.messages:
-            if message["role"] == "user":
-                history.append(HumanMessage(content=message["content"]))
-            elif message["role"] == "assistant":
-                history.append(HumanMessage(content=message["content"]))
-
-        response = ask_agent(question, df, history)
+        response = "The AI assistant is not available through the frontend API yet."
         with st.chat_message("assistant"):
             st.markdown(response)
 

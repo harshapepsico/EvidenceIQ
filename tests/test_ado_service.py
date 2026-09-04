@@ -1,6 +1,6 @@
 import requests
 
-from evidenceiq.services import ado_service
+from backend.services import ado_service
 
 
 class FakeResponse:

@@ -1,6 +1,6 @@
 from unittest.mock import Mock
 
-from evidenceiq.ui.app import fetch_dashboard
+from frontend.ui.app import fetch_dashboard
 
 
 def test_fetch_dashboard_posts_form_values_to_backend(monkeypatch):
@@ -17,8 +17,8 @@ def test_fetch_dashboard_posts_form_values_to_backend(monkeypatch):
     result_response.json.return_value = {"records": [], "metrics": {"total": 0}}
     post = Mock(return_value=submit_response)
     get = Mock(side_effect=[status_response, result_response])
-    monkeypatch.setattr("evidenceiq.ui.app.requests.post", post)
-    monkeypatch.setattr("evidenceiq.ui.app.requests.get", get)
+    monkeypatch.setattr("frontend.ui.app.requests.post", post)
+    monkeypatch.setattr("frontend.ui.app.requests.get", get)
 
     payload = fetch_dashboard("Demo", "123", "10,11")
 

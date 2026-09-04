@@ -12,8 +12,8 @@ import requests
 from fastapi import FastAPI, HTTPException, status
 
 from backend.schemas import DashboardRequest, DashboardResponse
-from evidenceiq.processing.metrics import calculate_metrics
-from evidenceiq.services.ado_service import fetch_test_points
+from backend.processing.metrics import calculate_metrics
+from backend.services.ado_service import fetch_test_points
 
 logger = logging.getLogger(__name__)
 

@@ -2,9 +2,9 @@
 
 from typing import Any, Dict, List, Optional, Tuple
 
-from evidenceiq.models.responses import evidence_response
-from evidenceiq.services.ado_service import fetch_iteration_attachments, fetch_result_attachments
-from evidenceiq.utils.helpers import attachment_name, attachment_size, extract_run_result_ids
+from backend.models.responses import evidence_response
+from backend.services.ado_service import fetch_iteration_attachments, fetch_result_attachments
+from backend.utils.helpers import attachment_name, attachment_size, extract_run_result_ids
 
 
 def add_attachments(target: Dict[Tuple[str, str, str, str], str], attachments: List[Dict[str, Any]], source: str) -> None:

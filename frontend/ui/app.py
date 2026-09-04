@@ -7,7 +7,7 @@ from pathlib import Path
 from typing import Any, Dict
 
 # Streamlit adds this script's directory to the import path. Add the repository
-# root as well so the evidenceiq package can be imported from a direct run.
+# root as well so the frontend package can be imported from a direct run.
 PROJECT_ROOT = Path(__file__).resolve().parents[2]
 if str(PROJECT_ROOT) not in sys.path:
     sys.path.insert(0, str(PROJECT_ROOT))
@@ -15,7 +15,9 @@ if str(PROJECT_ROOT) not in sys.path:
 import requests
 import streamlit as st
 
-from evidenceiq.ui.components.sidebar import render_sidebar_inputs
+from frontend.processing.metrics import calculate_metrics
+from frontend.processing.reports import filter_dataframe
+from frontend.ui.components.sidebar import render_sidebar_inputs
 
 DEFAULT_API_URL = "http://127.0.0.1:8000"
 REQUEST_TIMEOUT_SECONDS = 300
@@ -95,10 +97,8 @@ def render_loaded_dashboard(records) -> None:
     """Load and render dashboard dependencies only after the API succeeds."""
     import pandas as pd
 
-    from evidenceiq.processing.metrics import calculate_metrics
-    from evidenceiq.processing.reports import filter_dataframe
-    from evidenceiq.ui.components.dashboard import render_dashboard
-    from evidenceiq.ui.components.sidebar import render_filter_controls
+    from frontend.ui.components.dashboard import render_dashboard
+    from frontend.ui.components.sidebar import render_filter_controls
 
     dataframe = pd.DataFrame(records)
     if dataframe.empty:

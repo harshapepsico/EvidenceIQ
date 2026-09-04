@@ -5,7 +5,7 @@ from concurrent.futures import ThreadPoolExecutor
 
 import pytest
 
-from evidenceiq.services import ocr_service
+from backend.services import ocr_service
 
 
 class FakeOCRResponse:
