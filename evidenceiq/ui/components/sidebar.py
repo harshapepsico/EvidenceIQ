@@ -24,7 +24,7 @@ def render_filter_controls(df):
     st.sidebar.header("Filters")
 
     outcome_column = "Outcome" if "Outcome" in df.columns else None
-    tester_column = "Current Tester" if "Current Tester" in df.columns else None
+    tester_column = "Run By" if "Run By" in df.columns else None
 
     outcome_values = []
     tester_values = []
@@ -42,7 +42,7 @@ def render_filter_controls(df):
     )
 
     testers = st.sidebar.multiselect(
-        "Current Tester",
+        "Run By",
         tester_values,
         default=tester_values,
     )

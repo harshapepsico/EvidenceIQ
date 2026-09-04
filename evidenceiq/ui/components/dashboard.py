@@ -21,6 +21,9 @@ def render_dashboard(df: pd.DataFrame, filtered: pd.DataFrame, metrics: dict) ->
     c7.metric("Fail Rate", f"{metrics['fail_rate']}%")
     c8.metric("Evidence Compliance", f"{metrics['evidence_compliance']:.2f}%")
 
+    c9 = st.columns(1)[0]
+    c9.metric("Run Rate", f"{metrics['execution_rate']}%")
+
     st.divider()
 
     left, right = st.columns(2)
@@ -36,9 +39,9 @@ def render_dashboard(df: pd.DataFrame, filtered: pd.DataFrame, metrics: dict) ->
 
     with right:
         st.subheader("Tester Distribution")
-        if "Current Tester" in df.columns:
-            tester_df = df.groupby("Current Tester").size().reset_index(name="Count")
-            fig = px.bar(tester_df, x="Current Tester", y="Count", color="Count")
+        if "Run By" in df.columns:
+            tester_df = df.groupby("Run By").size().reset_index(name="Count")
+            fig = px.bar(tester_df, x="Run By", y="Count", color="Count")
             st.plotly_chart(fig, width="stretch")
         else:
             st.info("Tester data is not available yet.")

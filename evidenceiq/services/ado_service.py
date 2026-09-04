@@ -2,6 +2,7 @@
 
 import os
 import random
+import re
 import time
 from typing import Any, Callable, Dict, List, Optional
 import xml.etree.ElementTree as ET
@@ -295,6 +296,19 @@ def needs_tester_fallback(point: Dict[str, Any]) -> bool:
     )
 
 
+def has_valid_run_result(point: Dict[str, Any]) -> bool:
+    """Return whether a point has positive IDs for an executed result."""
+    outcome = str(point.get("outcome", "Not Run")).strip().casefold()
+    if outcome in {"not run", "unspecified", "notapplicable", "not applicable"}:
+        return False
+
+    run_id, result_id = extract_run_result_ids(point)
+    try:
+        return int(run_id or 0) > 0 and int(result_id or 0) > 0
+    except (TypeError, ValueError):
+        return False
+
+
 def fetch_test_result_executor(
     session: requests.Session,
     headers: Dict[str, str],
@@ -304,6 +318,12 @@ def fetch_test_result_executor(
     result_id: str,
 ) -> Optional[str]:
     """Fetch the identity in TestCaseResult.runBy."""
+    try:
+        if int(run_id) <= 0 or int(result_id) <= 0:
+            return None
+    except (TypeError, ValueError):
+        return None
+
     result_url = (
         f"https://dev.azure.com/{org}/{project}"
         f"/_apis/test/Runs/{run_id}/results/{result_id}"
@@ -337,19 +357,14 @@ def resolve_current_tester(
     project: str,
     point: Dict[str, Any],
 ) -> Any:
-    """Use TestCaseResult.runBy only for a passed, unassigned test point."""
-    current_tester = current_tester_from_point(point)
-    if not needs_tester_fallback(point):
-        return current_tester
+    """Return TestCaseResult.runBy for a point, when a result exists."""
+    if not has_valid_run_result(point):
+        return None
 
     run_id, result_id = extract_run_result_ids(point)
-    if not run_id or not result_id:
-        return current_tester
-
-    executor = fetch_test_result_executor(
+    return fetch_test_result_executor(
         session, headers, org, project, run_id, result_id
     )
-    return executor if is_assigned_tester(executor) else current_tester
 
 
 def fetch_points_for_suite(session: requests.Session, headers: Dict[str, str], org: str, project: str, plan_id: str, suite_id: int) -> List[Dict[str, Any]]:
@@ -385,6 +400,89 @@ def fetch_points_for_suite(session: requests.Session, headers: Dict[str, str], o
             return points
 
         skip += len(page)
+
+
+def _work_item_id_from_url(url: Any) -> Optional[str]:
+    if not isinstance(url, str):
+        return None
+    match = re.search(r"/workitems/(\d+)(?:/|$|\?)", url, flags=re.IGNORECASE)
+    return match.group(1) if match else None
+
+
+def fetch_bug_links(
+    session: requests.Session,
+    headers: Dict[str, str],
+    org: str,
+    project: str,
+    points: List[Dict[str, Any]],
+) -> Dict[str, bool]:
+    """Return whether each test case has a linked Azure DevOps Bug."""
+    test_case_ids = set()
+    for point in points:
+        test_case = point.get("testCase")
+        if isinstance(test_case, dict) and test_case.get("id") is not None:
+            test_case_ids.add(str(test_case["id"]))
+    bug_links = {test_case_id: False for test_case_id in test_case_ids}
+    linked_bug_ids = set()
+    work_items_url = f"https://dev.azure.com/{org}/{project}/_apis/wit/workitems"
+
+    sorted_test_case_ids = sorted(test_case_ids)
+    for start in range(0, len(sorted_test_case_ids), 200):
+        batch_ids = sorted_test_case_ids[start : start + 200]
+        data, error = fetch_json(
+            session,
+            work_items_url,
+            headers,
+            params={
+                "ids": ",".join(batch_ids),
+                "$expand": "Relations",
+                "api-version": API_VERSION,
+            },
+        )
+        if error:
+            print(f"Unable to resolve linked bugs: {error}")
+            continue
+
+        for work_item in data.get("value", []) or []:
+            if not isinstance(work_item, dict):
+                continue
+            test_case_id = str(work_item.get("id"))
+            for relation in work_item.get("relations") or []:
+                if not isinstance(relation, dict):
+                    continue
+                linked_id = _work_item_id_from_url(relation.get("url"))
+                if linked_id:
+                    linked_bug_ids.add((test_case_id, linked_id))
+
+    linked_ids = sorted({linked_id for _, linked_id in linked_bug_ids})
+    bug_ids = set()
+    for start in range(0, len(linked_ids), 200):
+        batch_ids = linked_ids[start : start + 200]
+        data, error = fetch_json(
+            session,
+            work_items_url,
+            headers,
+            params={
+                "ids": ",".join(batch_ids),
+                "fields": "System.WorkItemType",
+                "api-version": API_VERSION,
+            },
+        )
+        if error:
+            print(f"Unable to resolve linked work item types: {error}")
+            continue
+        for work_item in data.get("value", []) or []:
+            if not isinstance(work_item, dict):
+                continue
+            fields = work_item.get("fields")
+            if not isinstance(fields, dict):
+                continue
+            if str(fields.get("System.WorkItemType", "")).casefold() == "bug":
+                bug_ids.add(str(work_item.get("id")))
+
+    for test_case_id, linked_id in linked_bug_ids:
+        bug_links[test_case_id] = linked_id in bug_ids
+    return bug_links
 
 
 def fetch_test_points(
@@ -424,7 +522,8 @@ def fetch_test_points(
 
         unique_points = []
         for point in points:
-            test_case = point.get("testCase") or {}
+            test_case = point.get("testCase")
+            test_case = test_case if isinstance(test_case, dict) else {}
             test_case_id = test_case.get("id") if isinstance(test_case, dict) else None
             if test_case_id is not None:
                 deduplication_key = str(test_case_id)
@@ -434,9 +533,7 @@ def fetch_test_points(
             unique_points.append(point)
 
         attachments = [None] * len(unique_points)
-        resolved_testers = [
-            current_tester_from_point(point) for point in unique_points
-        ]
+        resolved_run_bys = [None] * len(unique_points)
 
         from concurrent.futures import ThreadPoolExecutor, as_completed
         from evidenceiq.services.evidence_service import fetch_attachment_details
@@ -456,7 +553,7 @@ def fetch_test_points(
                     point,
                 ): index
                 for index, point in enumerate(unique_points)
-                if needs_tester_fallback(point)
+                if has_valid_run_result(point)
             }
 
             for future in as_completed(future_map):
@@ -469,7 +566,7 @@ def fetch_test_points(
             for future in as_completed(tester_future_map):
                 index = tester_future_map[future]
                 try:
-                    resolved_testers[index] = future.result()
+                    resolved_run_bys[index] = future.result()
                 except Exception as exc:
                     print(
                         f"Unexpected tester lookup error for point "
@@ -478,19 +575,35 @@ def fetch_test_points(
 
         from evidenceiq.processing.transformers import build_record
 
-        resolved_points = []
-        for point, resolved_tester in zip(unique_points, resolved_testers):
-            current_tester = current_tester_from_point(point)
-            if (
-                resolved_tester != current_tester
-                and is_assigned_tester(resolved_tester)
-            ):
-                point = dict(point)
-                point["assignedTo"] = {"displayName": resolved_tester}
-            resolved_points.append(point)
+        failed_points = [
+            point
+            for point in unique_points
+            if str(point.get("outcome", "Not Run")).strip().casefold() == "failed"
+        ]
+        try:
+            bug_links = fetch_bug_links(
+                session, headers, ORG, project, failed_points
+            )
+        except Exception as exc:
+            print(f"Unable to resolve linked bugs for Suite {suite_id}: {exc}")
+            bug_links = {}
 
-        for point, attachment in zip(resolved_points, attachments):
-            records.append(build_record(suite_id, point, attachment))
+        for point, attachment, run_by in zip(unique_points, attachments, resolved_run_bys):
+            test_case = point.get("testCase") or {}
+            test_case_id = (
+                str(test_case.get("id"))
+                if isinstance(test_case, dict) and test_case.get("id") is not None
+                else None
+            )
+            records.append(
+                build_record(
+                    suite_id,
+                    point,
+                    attachment,
+                    bug_attached=bug_links.get(test_case_id),
+                    run_by=run_by,
+                )
+            )
 
         if progress_callback:
             progress_callback(suite_index, total_suites)

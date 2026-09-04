@@ -37,12 +37,12 @@ def test_load_dashboard_returns_records_and_metrics(monkeypatch):
 
 
 def test_load_dashboard_serializes_missing_values_as_null(monkeypatch):
-    dataframe = pd.DataFrame([{"Outcome": "Passed", "Current Tester": None}])
+    dataframe = pd.DataFrame([{"Outcome": "Passed", "Run By": None}])
     monkeypatch.setattr("backend.app.fetch_test_points", lambda **kwargs: dataframe)
 
     response = load_dashboard(DashboardRequest(project="Demo", plan_id="123"))
 
-    assert response.records[0]["Current Tester"] is None
+    assert response.records[0]["Run By"] is None
 
 
 def test_dashboard_post_route(monkeypatch):

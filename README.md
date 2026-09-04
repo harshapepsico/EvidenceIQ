@@ -62,3 +62,7 @@ Dashboard loads run as background jobs. The UI polls the job until its result
 is ready, and completed results are cached in the backend for one hour. A
 repeated request with the same project, plan, and suite IDs reuses that
 cached result.
+
+Dashboard records include `Bug Attached`: failed test cases show `Yes` or
+`No` based on linked Azure DevOps Bug work items; passed and other outcomes
+show `N/A`.
