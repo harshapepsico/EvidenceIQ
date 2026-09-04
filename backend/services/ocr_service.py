@@ -9,7 +9,7 @@ import requests
 import base64
 import uuid
 from pathlib import Path
-from evidenceiq.config import settings
+from backend.config import settings
 
 BASE_URL = "https://apim-na.qa.mypepsico.com/cgf/pepgenx"
 

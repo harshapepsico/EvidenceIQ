@@ -1,7 +1,7 @@
 import pandas as pd
 
-from evidenceiq.processing.metrics import calculate_metrics
-from evidenceiq.processing.transformers import build_dataframe, build_record
+from backend.processing.metrics import calculate_metrics
+from backend.processing.transformers import build_dataframe, build_record
 
 
 def test_build_record_marks_validated_evidence():

@@ -12,7 +12,7 @@ import pandas as pd
 import requests
 from requests.auth import HTTPBasicAuth
 
-from evidenceiq.config.settings import (
+from backend.config.settings import (
     ADO_BACKOFF_SECONDS,
     ADO_MAX_BACKOFF_SECONDS,
     ADO_MAX_RETRIES,
@@ -22,9 +22,9 @@ from evidenceiq.config.settings import (
     POINT_PAGE_SIZE,
     get_pat,
 )
-from evidenceiq.models.responses import evidence_response
-from evidenceiq.processing.transformers import build_dataframe, build_record
-from evidenceiq.utils.helpers import extract_run_result_ids, response_error_message
+from backend.models.responses import evidence_response
+from backend.processing.transformers import build_dataframe, build_record
+from backend.utils.helpers import extract_run_result_ids, response_error_message
 
 
 def validate_environment(project: str, plan_id: str, pat: Optional[str] = None) -> None:
@@ -536,7 +536,7 @@ def fetch_test_points(
         resolved_run_bys = [None] * len(unique_points)
 
         from concurrent.futures import ThreadPoolExecutor, as_completed
-        from evidenceiq.services.evidence_service import fetch_attachment_details
+        from backend.services.evidence_service import fetch_attachment_details
 
         with ThreadPoolExecutor(max_workers=MAX_WORKERS) as executor:
             future_map = {
@@ -573,7 +573,7 @@ def fetch_test_points(
                         f"{unique_points[index].get('id', 'N/A')}: {exc}"
                     )
 
-        from evidenceiq.processing.transformers import build_record
+        from backend.processing.transformers import build_record
 
         failed_points = [
             point

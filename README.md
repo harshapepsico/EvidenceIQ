@@ -22,7 +22,7 @@ uvicorn backend.app:app --reload
 In a second terminal, start the UI:
 
 ```powershell
-python -m streamlit run evidenceiq/ui/app.py
+python -m streamlit run frontend/ui/app.py
 ```
 
 The UI calls `http://127.0.0.1:8000` by default. To use another backend,
@@ -66,3 +66,7 @@ cached result.
 Dashboard records include `Bug Attached`: failed test cases show `Yes` or
 `No` based on linked Azure DevOps Bug work items; passed and other outcomes
 show `N/A`.
+
+
+uvicorn backend.app:app --reload
+python -m streamlit run frontend/ui/app.py

@@ -7,9 +7,9 @@ import xml
 import pandas as pd
 import requests
 from requests.auth import HTTPBasicAuth
-from evidenceiq.config.settings import API_VERSION, ORG, POINT_PAGE_SIZE, get_pat
-from evidenceiq.utils.helpers import extract_run_result_ids, response_error_message
-from evidenceiq.services.ado_service import create_session
+from backend.config.settings import API_VERSION, ORG, POINT_PAGE_SIZE, get_pat
+from backend.utils.helpers import extract_run_result_ids, response_error_message
+from backend.services.ado_service import create_session
 
 
 def fetch_paycode(org: str, project: str, test_case_id: int):
