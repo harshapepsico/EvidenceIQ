@@ -19,8 +19,8 @@ def filter_dataframe(df: pd.DataFrame, outcomes: Any, testers: Any, search: str)
     if "Outcome" in df.columns and outcomes:
         filtered = filtered[filtered["Outcome"].isin(outcomes)]
 
-    if "Current Tester" in df.columns and testers:
-        filtered = filtered[filtered["Current Tester"].isin(testers)]
+    if "Run By" in df.columns and testers:
+        filtered = filtered[filtered["Run By"].isin(testers)]
 
     if search and "Test Case Name" in df.columns:
         search_value = str(search).strip().lower()

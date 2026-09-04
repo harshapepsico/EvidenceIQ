@@ -116,6 +116,84 @@ def test_fetch_json_does_not_retry_client_errors(monkeypatch):
     assert len(session.calls) == 1
 
 
+def test_has_valid_run_result_rejects_unexecuted_and_zero_ids():
+    assert not ado_service.has_valid_run_result(
+        {"outcome": "NotApplicable", "lastTestRun": {"id": 0}, "lastResult": {"id": 0}}
+    )
+    assert not ado_service.has_valid_run_result(
+        {"outcome": "Unspecified", "lastTestRun": {"id": 10}, "lastResult": {"id": 20}}
+    )
+    assert not ado_service.has_valid_run_result(
+        {"outcome": "Failed", "lastTestRun": {"id": 0}, "lastResult": {"id": 20}}
+    )
+    assert ado_service.has_valid_run_result(
+        {"outcome": "Failed", "lastTestRun": {"id": 10}, "lastResult": {"id": 20}}
+    )
+
+
+def test_resolve_current_tester_does_not_call_ado_for_zero_ids(monkeypatch):
+    calls = []
+    monkeypatch.setattr(
+        ado_service,
+        "fetch_test_result_executor",
+        lambda *args: calls.append(args),
+    )
+
+    result = ado_service.resolve_current_tester(
+        None,
+        {},
+        "org",
+        "project",
+        {"outcome": "Failed", "lastTestRun": {"id": 0}, "lastResult": {"id": 0}},
+    )
+
+    assert result is None
+    assert calls == []
+
+
+def test_fetch_bug_links_identifies_only_bug_work_items():
+    session = FakeSession(
+        [
+            FakeResponse(
+                200,
+                {
+                    "value": [
+                        {
+                            "id": 10,
+                            "relations": [
+                                {"url": "https://dev.azure.com/org/_apis/wit/workItems/99"},
+                                {"url": "https://dev.azure.com/org/_apis/wit/workItems/100"},
+                            ],
+                        },
+                        {"id": 11, "relations": []},
+                    ]
+                },
+            ),
+            FakeResponse(
+                200,
+                {
+                    "value": [
+                        {"id": 99, "fields": {"System.WorkItemType": "Bug"}},
+                        {"id": 100, "fields": {"System.WorkItemType": "Task"}},
+                    ]
+                },
+            ),
+        ]
+    )
+
+    links = ado_service.fetch_bug_links(
+        session,
+        {},
+        "org",
+        "project",
+        [{"testCase": {"id": 10}}, {"testCase": {"id": 11}}],
+    )
+
+    assert links == {"10": True, "11": False}
+    assert session.calls[0][1]["params"]["$expand"] == "Relations"
+    assert session.calls[1][1]["params"]["fields"] == "System.WorkItemType"
+
+
 def test_fetch_points_for_suite_skips_after_retry_exhaustion(monkeypatch, capsys):
     session = FakeSession([FakeResponse(429, text="rate limited")])
     monkeypatch.setattr(ado_service, "ADO_MAX_RETRIES", 0)

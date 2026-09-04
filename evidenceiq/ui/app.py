@@ -119,7 +119,7 @@ def run_app() -> None:
         page_icon="🧪",
         layout="wide",
     )
-    st.title("🧪 ADO WFM QA Dashboard")
+    st.title("🧪 ADO QA Dashboard")
 
     if "dashboard_loaded" not in st.session_state:
         st.session_state.dashboard_loaded = False
@@ -133,6 +133,7 @@ def run_app() -> None:
             st.sidebar.error("Project Name and Test Plan ID are required.")
         else:
             with st.spinner("Fetching test cases from Azure DevOps..."):
+                progress_bar = None
                 try:
                     progress_bar = st.progress(0, text="Starting dashboard load...")
 
@@ -158,6 +159,9 @@ def run_app() -> None:
                 else:
                     st.session_state.records = payload.get("records", [])
                     st.session_state.dashboard_loaded = True
+                finally:
+                    if progress_bar is not None:
+                        progress_bar.empty()
 
     if not st.session_state.dashboard_loaded:
         st.info("Please enter Project and Test Plan ID.")

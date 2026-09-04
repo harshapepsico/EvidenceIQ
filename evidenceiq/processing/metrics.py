@@ -20,11 +20,16 @@ def calculate_metrics(df: pd.DataFrame) -> Dict[str, Any]:
         passed = len(df[df[outcome_column] == "Passed"])
         failed = len(df[df[outcome_column] == "Failed"])
         blocked = len(df[df[outcome_column] == "Blocked"])
-        not_run = len(df[df[outcome_column] == "Not Run"])
+        normalized_outcomes = df[outcome_column].fillna("").astype(str).str.strip().str.casefold()
+        not_run = int(
+            normalized_outcomes.isin(
+                {"not run", "unspecified", "notapplicable", "not applicable"}
+            ).sum()
+        )
 
     pass_rate = round((passed / total) * 100, 2) if total else 0
     fail_rate = round((failed / total) * 100, 2) if total else 0
-    execution_rate = round(((total - not_run) / total) * 100, 2) if total else 0
+    execution_rate = round(((passed + failed + blocked) / total) * 100, 2) if total else 0
 
     evidence_compliance = 0
     if passed and evidence_column:
