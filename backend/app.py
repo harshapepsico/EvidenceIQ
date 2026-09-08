@@ -1,6 +1,7 @@
 """FastAPI application for loading EvidenceIQ dashboard data."""
 
 import json
+import hashlib
 import logging
 import threading
 import time
@@ -29,11 +30,15 @@ def home():
 
 
 def _request_key(request: DashboardRequest) -> str:
+    pat_digest = hashlib.sha256(
+        request.pat.get_secret_value().encode("utf-8")
+    ).hexdigest()
     return json.dumps(
         {
             "project": request.project.strip(),
             "plan_id": request.plan_id.strip(),
             "suite_ids": (request.suite_ids or "").strip(),
+            "pat": pat_digest,
         },
         sort_keys=True,
     )
@@ -52,6 +57,7 @@ def _remove_expired_jobs() -> None:
 
 def _load_dashboard_job(job_id: str, request: DashboardRequest) -> None:
     try:
+        pat = request.pat.get_secret_value()
         with job_lock:
             dashboard_jobs[job_id]["status"] = "running"
             dashboard_jobs[job_id]["updated_at"] = time.time()
@@ -70,7 +76,7 @@ def _load_dashboard_job(job_id: str, request: DashboardRequest) -> None:
             project=request.project.strip(),
             plan_id=request.plan_id.strip(),
             suite_ids=None,
-            pat=None,
+            pat=pat,
             suite_ids_input=(request.suite_ids or "").strip(),
             progress_callback=update_progress,
         )
@@ -153,7 +159,7 @@ def load_dashboard(request: DashboardRequest) -> DashboardResponse:
             project=request.project.strip(),
             plan_id=request.plan_id.strip(),
             suite_ids=None,
-            pat=None,
+            pat=request.pat.get_secret_value(),
             suite_ids_input=(request.suite_ids or "").strip(),
         )
     except ValueError as exc:

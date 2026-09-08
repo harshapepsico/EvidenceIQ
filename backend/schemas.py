@@ -2,7 +2,7 @@
 
 from typing import Any, Dict, List, Optional
 
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, Field, SecretStr, field_validator
 
 
 class DashboardRequest(BaseModel):
@@ -11,6 +11,14 @@ class DashboardRequest(BaseModel):
     project: str = Field(..., min_length=1)
     plan_id: str = Field(..., min_length=1)
     suite_ids: Optional[str] = None
+    pat: SecretStr = Field(..., min_length=1)
+
+    @field_validator("pat")
+    @classmethod
+    def validate_pat(cls, value: SecretStr) -> SecretStr:
+        if not value.get_secret_value().strip():
+            raise ValueError("PAT must not be blank.")
+        return value
 
 
 class DashboardResponse(BaseModel):
