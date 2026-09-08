@@ -20,12 +20,17 @@ def test_fetch_dashboard_posts_form_values_to_backend(monkeypatch):
     monkeypatch.setattr("frontend.ui.app.requests.post", post)
     monkeypatch.setattr("frontend.ui.app.requests.get", get)
 
-    payload = fetch_dashboard("Demo", "123", "10,11")
+    payload = fetch_dashboard("Demo", "123", "10,11", "secret")
 
     assert payload["records"] == []
     post.assert_called_once_with(
         "http://127.0.0.1:8000/dashboard/jobs",
-        json={"project": "Demo", "plan_id": "123", "suite_ids": "10,11"},
+        json={
+            "project": "Demo",
+            "plan_id": "123",
+            "suite_ids": "10,11",
+            "pat": "secret",
+        },
         timeout=15,
     )
     assert get.call_args_list[0].args[0].endswith("/dashboard/jobs/job-1")

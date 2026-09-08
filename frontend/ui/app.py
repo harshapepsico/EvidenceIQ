@@ -46,6 +46,7 @@ def fetch_dashboard(
     project: str,
     plan_id: str,
     suite_ids: str,
+    pat: str,
     progress_callback=None,
 ) -> Dict[str, Any]:
     """Submit a dashboard job and poll until its cached result is ready."""
@@ -56,6 +57,7 @@ def fetch_dashboard(
             "project": project,
             "plan_id": plan_id,
             "suite_ids": suite_ids or None,
+            "pat": pat,
         },
         timeout=JOB_REQUEST_TIMEOUT_SECONDS,
     )
@@ -126,11 +128,11 @@ def run_app() -> None:
     if "records" not in st.session_state:
         st.session_state.records = None
 
-    project, plan_id, suite_ids_input, load_clicked = render_sidebar_inputs()
+    project, plan_id, suite_ids_input, pat, load_clicked = render_sidebar_inputs()
 
     if load_clicked:
-        if not project.strip() or not plan_id.strip():
-            st.sidebar.error("Project Name and Test Plan ID are required.")
+        if not project.strip() or not plan_id.strip() or not pat.strip():
+            st.sidebar.error("Project Name, Test Plan ID, and PAT are required.")
         else:
             with st.spinner("Fetching test cases from Azure DevOps..."):
                 progress_bar = None
@@ -146,7 +148,7 @@ def run_app() -> None:
                         progress_bar.progress(percentage, text=label)
 
                     payload = fetch_dashboard(
-                        project, plan_id, suite_ids_input, update_progress
+                        project, plan_id, suite_ids_input, pat, update_progress
                     )
                     progress_bar.progress(100, text="Dashboard ready (100%)")
                 except (requests.RequestException, TimeoutError) as exc:

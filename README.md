@@ -5,7 +5,8 @@ DevOps data, and a Streamlit UI that renders the dashboard.
 
 ## Setup
 
-Install the dependencies and make sure `ADO_PAT` is present in `.env`:
+Install the dependencies. Users enter their Azure DevOps PAT in the masked UI
+field when loading a dashboard; dashboard PATs are not stored in `.env`.
 
 ```powershell
 python -m pip install -r requirements.txt
@@ -37,7 +38,8 @@ Content-Type: application/json
 {
   "project": "MyProject",
   "plan_id": "12345",
-  "suite_ids": "100,101"
+  "suite_ids": "100,101",
+  "pat": "user-entered-token"
 }
 ```
 
@@ -67,6 +69,7 @@ Dashboard records include `Bug Attached`: failed test cases show `Yes` or
 `No` based on linked Azure DevOps Bug work items; passed and other outcomes
 show `N/A`.
 
-
-uvicorn backend.app:app --reload
-python -m streamlit run frontend/ui/app.py
+The PAT is used only for the active dashboard load. It is not returned by the
+API, logged, or included in plaintext in the backend job cache. Revoke any PAT
+that has previously been committed or shared, and create a new one for use in
+the UI.

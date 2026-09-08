@@ -7,6 +7,7 @@ def render_sidebar_inputs():
     """Render the project, plan, suite, and load controls."""
     project = st.sidebar.text_input("Project Name")
     plan_id = st.sidebar.text_input("Test Plan ID")
+    pat = st.sidebar.text_input("Azure DevOps PAT", type="password")
     suite_ids_input = st.sidebar.text_input(
         "Suite IDs (optional)",
         placeholder="12345,67890",
@@ -16,7 +17,7 @@ def render_sidebar_inputs():
         type="primary",
         use_container_width=True,
     )
-    return project, plan_id, suite_ids_input, load_clicked
+    return project, plan_id, suite_ids_input, pat, load_clicked
 
 
 def render_filter_controls(df):
